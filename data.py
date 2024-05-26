@@ -37,6 +37,7 @@ if not os.path.exists('./pickled_data/data.pkl') or not os.path.exists('./pickle
     if not os.path.exists('./pickled_data'):
         os.mkdir('./pickled_data')
     labels = [i.name for i in os.scandir('./data') if i.is_dir()]
+    labels.sort()
     fft_data = []
     
     for label in tqdm(labels, desc='Reading wav files'):
