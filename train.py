@@ -1,9 +1,11 @@
+import os
+
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
 from stable_baselines3.common import env_checker
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList
 
 import numpy as np
@@ -13,7 +15,11 @@ from tqdm import tqdm
 from data import labels, fft_data
 
 EP_LEN = None # set by get_training_validation_data
-
+RAND_SEED = 0 # random seed
+N_CORES = 4 # number of cores to use
+SAVE_FREQ = 5 # frequency to save model
+SAVE_FOLDER = "./saves"
+SAVE_PATH = "ask" # save path to resume from. Leave at 'ask' to ask or blank to restart
 
 def get_training_validation_data(td: int | float=None):
     # if td is None, then look for the smallest label and use that as the td - 1
@@ -103,6 +109,38 @@ class GuitarTabbingModel(gym.Env):
         self.onIndex += 1
         return self._get_obs(), self._get_info()
 
+def mkenv(rank):
+    def _init():
+        env = GuitarTabbingModel()
+        env.reset(seed=RAND_SEED+rank)
+        return env
+    set_random_seed(RAND_SEED)
+    return _init
+
 if __name__ == "__main__":
+    set_random_seed()
     env = GuitarTabbingModel()
+    env.reset(seed=RAND_SEED)
+    vec_env = SubprocVecEnv([mkenv(i) for i in range(N_CORES)])
+    if not os.path.exists(SAVE_FOLDER):
+        os.mkdir(SAVE_FOLDER)
+    checkpoint_callback = CheckpointCallback(save_freq=SAVE_FREQ, save_path=SAVE_FOLDER, name_prefix='training_save')
+    callbacks = [checkpoint_callback]
     
+    SAVE_PATH = input("Resume point (leave blank to restart): ") if SAVE_PATH == 'ask' else SAVE_PATH
+    if SAVE_PATH != "":
+        if os.path.exists(SAVE_FOLDER + SAVE_PATH):
+            print("Loading save...")
+            model = PPO.load(SAVE_PATH, env=env)
+            model.n_steps = EP_LEN
+            model.n_envs = N_CORES
+            model.rollout_buffer.buffer_size = EP_LEN
+            model.rollout_buffer.n_envs = N_CORES
+            model.rollout_buffer.reset()
+        else:
+            raise ValueError(f"Save path {SAVE_PATH} does not exist!")
+    else:
+        model = PPO('CnnPolicy', env, verbose=1, n_steps=EP_LEN // 8, batch_size=128, n_epochs=3, gamma=0.998, tensorboard_log="./log.txt")
+    
+    model.learn(total_timesteps=(EP_LEN)*N_CORES*5000, callback=CallbackList(callbacks))
+        
